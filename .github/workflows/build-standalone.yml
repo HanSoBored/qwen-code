@@ -1,0 +1,51 @@
+name: 'Build Standalone (fork)'
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (sha/branch) to build'
+        required: true
+        type: 'string'
+
+jobs:
+  build:
+    name: 'Build Standalone Archives'
+    runs-on: 'ubuntu-latest'
+    permissions:
+      contents: 'read'
+      actions: 'read'
+    steps:
+      - name: 'Checkout'
+        uses: 'actions/checkout@v4'
+        with:
+          ref: '${{ github.event.inputs.ref }}'
+          fetch-depth: 0
+
+      - name: 'Setup Node.js'
+        uses: 'actions/setup-node@v4'
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: 'package-lock.json'
+
+      - name: 'Install Dependencies'
+        run: 'npm ci --no-audit --progress=false'
+
+      - name: 'Build Bundle and Prepare Package'
+        run: |-
+          npm run build
+          npm run bundle
+          npm run prepare:package
+
+      - name: 'Build Standalone Archives'
+        run: 'npm run package:standalone:release -- --version 0.21.7-nightly.20260807.9e1b1eb4f --out-dir dist/standalone'
+
+      - name: 'Upload linux-arm64 archive'
+        uses: 'actions/upload-artifact@v4'
+        with:
+          name: 'standalone-linux-arm64'
+          path: |
+            dist/standalone/qwen-code-linux-arm64.tar.gz
+            dist/standalone/SHA256SUMS
+          if-no-files-found: 'error'
