@@ -505,6 +505,38 @@ describe('createBridgeFileSystemAdapter', () => {
       expect(acpEvents.length).toBeGreaterThanOrEqual(1);
     });
 
+    it('rejects external-root writes for an untrusted workspace with untrusted_workspace', async () => {
+      // Trust-gate parity on the widened path: the external-root
+      // fallback resolves the path, but the commit still goes through
+      // `wfs.writeTextOverwrite`, whose `assertTrustedForIntent` gate
+      // rejects with the same `untrusted_workspace` posture as
+      // in-workspace writes. Pin the specific kind so a future
+      // refactor that drops the gate or routes external writes around
+      // it fails here instead of silently widening the boundary.
+      const adapter = createBridgeFileSystemAdapter(
+        buildFactory({ trusted: false }),
+        { externalWriteRoots: [tmpRoot] },
+      );
+      const target = path.join(tmpRoot, 'untrusted-ext.txt');
+
+      const err = await adapter
+        .writeText({
+          path: target,
+          content: 'x',
+          sessionId: 'sess:ext',
+        })
+        .catch((e: unknown) => e);
+
+      expect((err as { kind?: string }).kind).toBe('untrusted_workspace');
+
+      // The gate rejects before any disk touch — no bytes landed in
+      // the root (same ENOENT posture as the sibling deny tests).
+      // Remove the target if a regression left it behind, then assert
+      // the absence that proves the write never reached disk.
+      await fsp.rm(target, { force: true });
+      await expect(fsp.stat(target)).rejects.toThrow(/ENOENT/);
+    });
+
     it('still rejects writes outside both workspace and external roots', async () => {
       const adapter = createBridgeFileSystemAdapter(
         buildFactory({ trusted: true }),

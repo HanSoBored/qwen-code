@@ -23,3 +23,12 @@ No ignore-rule filtering on external roots; audit `relPath` is workspace-relativ
 (`pathHash` unaffected; see `QWEN_AUDIT_RAW_PATHS`); acp-http `qwen/file/write` /
 `qwen/file/edit` unchanged. Per-workspace config (BW-4) deferred; env is global,
 validated at boot (non-absolute entry fails the daemon loudly).
+
+- A symlink INSIDE the workspace that points into a configured external root is
+  rejected by the workspace resolve (`symlink_escape`) and then ALLOWED via the
+  external-root fallback. Within the granted boundary but surprising — the agent
+  writes "through" a symlink it thinks is workspace-local. Documented as intended.
+
+- Audit on external writes: a successful external write first emits an `fs.denied`
+  (failed workspace resolve) then `recordAccess`; attempts outside every root emit
+  only the workspace denial with no explicit fallback-attempt signal.
