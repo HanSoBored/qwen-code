@@ -252,7 +252,7 @@ export class MessageEmitter extends BaseEmitter {
     // text (e.g. the Web Shell chat). QWEN_DISABLE_USAGE_UPDATE=1 skips the
     // standard usage_update frame; the private `_meta.usage` on transcript
     // updates above is unaffected.
-    if (process.env.QWEN_DISABLE_USAGE_UPDATE === '1') {
+    if (process.env['QWEN_DISABLE_USAGE_UPDATE'] === '1') {
       return;
     }
 

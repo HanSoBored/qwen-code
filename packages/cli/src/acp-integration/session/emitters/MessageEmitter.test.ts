@@ -318,7 +318,7 @@ describe('MessageEmitter', () => {
     });
 
     it('skips the usage_update frame when QWEN_DISABLE_USAGE_UPDATE is set', async () => {
-      process.env.QWEN_DISABLE_USAGE_UPDATE = '1';
+      process.env['QWEN_DISABLE_USAGE_UPDATE'] = '1';
       try {
         await emitter.emitUsageMetadata({ promptTokenCount: 100 }, '', 20);
 
@@ -335,7 +335,7 @@ describe('MessageEmitter', () => {
           }),
         );
       } finally {
-        delete process.env.QWEN_DISABLE_USAGE_UPDATE;
+        delete process.env['QWEN_DISABLE_USAGE_UPDATE'];
       }
     });
 
