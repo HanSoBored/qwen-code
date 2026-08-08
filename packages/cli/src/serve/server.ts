@@ -42,6 +42,10 @@ import type {
   DeviceFlowRegistry,
 } from './auth/device-flow.js';
 import { createBridgeFileSystemAdapter } from './bridge-file-system-adapter.js';
+import {
+  parseExternalWriteRootsEnv,
+  QWEN_SERVE_EXTERNAL_WRITE_ROOTS_ENV,
+} from './run-qwen-serve.js';
 import { createDaemonStatusProvider } from './daemon-status-provider.js';
 import { createWorkspaceProvidersStatusProvider } from './workspace-providers-status.js';
 import { createWorkspaceSkillsStatusProvider } from './workspace-skills-status.js';
@@ -438,6 +442,15 @@ export interface ServeAppDeps {
    */
   fsFactory?: WorkspaceFileSystemFactory;
   /**
+   * Opt-in external write roots for the default/embedded bridge's
+   * `BridgeFileSystem` adapter (see `createBridgeFileSystemAdapter`).
+   * When omitted, parsed from `QWEN_SERVE_EXTERNAL_WRITE_ROOTS` (the
+   * same env helper `runQwenServe` uses); default OFF. Widen the
+   * adapter, never `routeFileSystemFactory` — HTTP fs routes stay
+   * workspace-scoped by construction.
+   */
+  acpExternalWriteRoots?: readonly string[];
+  /**
    * Device-flow auth registry. Tests inject a fake; production callers
    * omit this and `createServeApp` constructs a default wired to the
    * shipped Qwen provider, the bridge's `publishWorkspaceEvent`,
@@ -764,6 +777,14 @@ export function createServeApp(
       injected: deps.fsFactory,
       trusted: false,
     });
+  // Opt-in external write roots for the default/embedded bridge's
+  // adapter (default OFF). Same env helper `runQwenServe` uses; a
+  // non-absolute entry throws so a misconfiguration fails boot loudly.
+  const acpExternalWriteRoots =
+    deps.acpExternalWriteRoots ??
+    parseExternalWriteRootsEnv(
+      process.env[QWEN_SERVE_EXTERNAL_WRITE_ROOTS_ENV],
+    );
   const tokenConfigured =
     typeof opts.token === 'string' && opts.token.length > 0;
   const sessionShellCommandEnabled =
@@ -980,7 +1001,9 @@ export function createServeApp(
       delegateReadTextFileToClient: false,
       // Final ACP text writes remain delegated through WorkspaceFileSystem.
       // Unexpected delegated reads still fail closed at the WFS boundary.
-      fileSystem: createBridgeFileSystemAdapter(fsFactory),
+      fileSystem: createBridgeFileSystemAdapter(fsFactory, {
+        externalWriteRoots: acpExternalWriteRoots,
+      }),
       // Reverse tool channel: answer the child's `client_mcp/message`
       // ext-method by reaching the WS connection that hosts the named server.
       clientMcpSender: clientMcpSenderRegistry.lookup,

@@ -40,7 +40,9 @@ workspace. The model can still fall back to shell at that point. Moving writes
 child-local as well would give up the trust gate, symlink rejection, TOCTOU
 protection, atomic temp-and-rename with mode preservation, and the write audit,
 which is a materially larger concession than the read change; it is deliberately
-out of scope here and tracked separately.
+out of scope here and tracked separately. An opt-in daemon widening that keeps
+all of those protections for configured roots is documented separately in
+[daemon-local-text-writes.md](daemon-local-text-writes.md).
 
 ### Pre-approval exposure in the daemon
 
