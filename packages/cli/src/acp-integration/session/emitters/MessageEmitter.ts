@@ -248,6 +248,14 @@ export class MessageEmitter extends BaseEmitter {
       return;
     }
 
+    // Opt-out for clients that surface unknown session-update frames as raw
+    // text (e.g. the Web Shell chat). QWEN_DISABLE_USAGE_UPDATE=1 skips the
+    // standard usage_update frame; the private `_meta.usage` on transcript
+    // updates above is unaffected.
+    if (process.env.QWEN_DISABLE_USAGE_UPDATE === '1') {
+      return;
+    }
+
     const used =
       usageMetadata.promptTokenCount ?? usageMetadata.totalTokenCount;
     const size = this.ctx.config.getContentGeneratorConfig()?.contextWindowSize;
