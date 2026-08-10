@@ -32,6 +32,12 @@ jobs:
       - name: 'Install Dependencies'
         run: 'npm ci --no-audit --progress=false'
 
+      - name: 'Typecheck'
+        run: 'npm run typecheck'
+
+      - name: 'Targeted tests (serve fs adapter + env parse)'
+        run: 'npm -w packages/cli run test -- src/serve/bridge-file-system-adapter.test.ts src/serve/run-qwen-serve.test.ts'
+
       - name: 'Build Bundle and Prepare Package'
         run: |-
           npm run build
@@ -39,7 +45,7 @@ jobs:
           npm run prepare:package
 
       - name: 'Build Standalone Archives'
-        run: 'npm run package:standalone:release -- --version 0.21.7-nightly.20260807.9e1b1eb4f --out-dir dist/standalone'
+        run: 'npm run package:standalone:release -- --version "0.21.8-fork.$(git rev-parse --short HEAD)" --out-dir dist/standalone'
 
       - name: 'Upload linux-arm64 archive'
         uses: 'actions/upload-artifact@v4'

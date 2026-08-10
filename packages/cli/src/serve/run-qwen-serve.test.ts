@@ -19,6 +19,7 @@ import {
   InvalidPolicyConfigError,
   createDisabledChannelWorkerSupervisor,
   createBoundChannelDeliveryHandler,
+  parseExternalWriteRootsEnv,
   resolveRuntimeStartupTimeoutMs,
   runQwenServe,
   type RunHandle,
@@ -441,6 +442,33 @@ describe('createBoundChannelDeliveryHandler', () => {
       code: 'channel_delivery_failed',
       error: 'Channel delivery failed.',
     });
+  });
+});
+
+describe('parseExternalWriteRootsEnv', () => {
+  it('returns [] for unset / empty / whitespace-only values (OFF)', () => {
+    expect(parseExternalWriteRootsEnv(undefined)).toEqual([]);
+    expect(parseExternalWriteRootsEnv('')).toEqual([]);
+    expect(parseExternalWriteRootsEnv('   ')).toEqual([]);
+  });
+
+  it('splits a delimiter-separated list, trims, and drops empty entries', () => {
+    const roots = [
+      path.join(os.tmpdir(), 'ext-root-a'),
+      path.join(os.tmpdir(), 'ext-root-b'),
+    ];
+    const raw = ` ${roots[0]}${path.delimiter}${path.delimiter} ${roots[1]} `;
+    expect(parseExternalWriteRootsEnv(raw)).toEqual(roots);
+  });
+
+  it('throws a boot error on any non-absolute entry', () => {
+    const abs = path.join(os.tmpdir(), 'ext-root-a');
+    expect(() =>
+      parseExternalWriteRootsEnv(`${abs}${path.delimiter}relative-root`),
+    ).toThrow(TypeError);
+    expect(() =>
+      parseExternalWriteRootsEnv(`${abs}${path.delimiter}relative-root`),
+    ).toThrow(/not an absolute path/);
   });
 });
 

@@ -210,6 +210,12 @@ const QWEN_SERVE_CDP_TUNNEL_OVER_WS_ENV = 'QWEN_SERVE_CDP_TUNNEL_OVER_WS';
 const QWEN_SERVE_PROMPT_DEADLINE_MS_ENV = 'QWEN_SERVE_PROMPT_DEADLINE_MS';
 const QWEN_SERVE_WRITER_IDLE_TIMEOUT_MS_ENV =
   'QWEN_SERVE_WRITER_IDLE_TIMEOUT_MS';
+// Opt-in external write roots for the daemon ACP bridge adapter
+// (`createBridgeFileSystemAdapter`). Delimiter-separated absolute
+// paths; unset/empty = OFF (external delegated writes stay
+// workspace-bound and fail closed).
+export const QWEN_SERVE_EXTERNAL_WRITE_ROOTS_ENV =
+  'QWEN_SERVE_EXTERNAL_WRITE_ROOTS';
 const SHUTDOWN_FORCE_CLOSE_MS = 5_000;
 const DAEMON_LOG_FORCED_FLUSH_BUDGET_MS = 250;
 const DEFAULT_LIVE_DISCOVERY_RETRY_MS = 5_000;
@@ -470,6 +476,33 @@ function envFlagDisabled(raw: string | undefined): boolean {
   if (raw === undefined) return false;
   const normalized = raw.trim().toLowerCase();
   return normalized === '0' || normalized === 'false';
+}
+
+/**
+ * Parse `QWEN_SERVE_EXTERNAL_WRITE_ROOTS` into an absolute-path list
+ * for the daemon ACP bridge adapter's opt-in external write roots.
+ * Delimiter-separated, trimmed, empty entries dropped; unset/empty →
+ * `[]` (OFF). Throws `TypeError` on any non-absolute entry so a
+ * misconfiguration fails the boot loudly (like `parseDeadlineEnv`)
+ * instead of silently widening the daemon's write boundary.
+ */
+export function parseExternalWriteRootsEnv(
+  raw: string | undefined,
+): string[] {
+  if (raw === undefined) return [];
+  const roots: string[] = [];
+  for (const entry of raw.split(path.delimiter)) {
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) continue;
+    if (!path.isAbsolute(trimmed)) {
+      throw new TypeError(
+        `Invalid ${QWEN_SERVE_EXTERNAL_WRITE_ROOTS_ENV}="${raw}": ` +
+          `entry ${JSON.stringify(trimmed)} is not an absolute path.`,
+      );
+    }
+    roots.push(trimmed);
+  }
+  return roots;
 }
 
 function hasChromeExtensionOrigin(origins: readonly string[] | undefined) {
@@ -2126,6 +2159,20 @@ async function runQwenServeImpl(
       QWEN_SERVE_WRITER_IDLE_TIMEOUT_MS_ENV,
       process.env[QWEN_SERVE_WRITER_IDLE_TIMEOUT_MS_ENV],
     );
+  // Opt-in external write roots for the ACP bridge adapter (default
+  // OFF). Parsed once at boot; a non-absolute entry throws so the
+  // daemon fails loudly instead of silently widening its write
+  // boundary.
+  const acpExternalWriteRoots = parseExternalWriteRootsEnv(
+    process.env[QWEN_SERVE_EXTERNAL_WRITE_ROOTS_ENV],
+  );
+  if (acpExternalWriteRoots.length > 0) {
+    writeStderrLine(
+      `qwen serve: ${QWEN_SERVE_EXTERNAL_WRITE_ROOTS_ENV} enabled ` +
+        `(${acpExternalWriteRoots.length} root(s)); delegated ACP text ` +
+        `writes may land outside the bound workspace.`,
+    );
+  }
   const clientMcpOverWsEnv = process.env[QWEN_SERVE_CLIENT_MCP_OVER_WS_ENV];
   const cdpTunnelOverWsEnv = process.env[QWEN_SERVE_CDP_TUNNEL_OVER_WS_ENV];
   const chromeExtensionOriginAllowed = hasChromeExtensionOrigin(
@@ -3935,7 +3982,9 @@ async function runQwenServeImpl(
         permissionAudit: permissionAuditPublisher,
         statusProvider,
         delegateReadTextFileToClient: false,
-        fileSystem: createBridgeFileSystemAdapter(fsFactory),
+        fileSystem: createBridgeFileSystemAdapter(fsFactory, {
+          externalWriteRoots: acpExternalWriteRoots,
+        }),
         persistApprovalMode: (workspace, mode) =>
           withSettingsLock(workspace, async () => {
             primaryGenerationGuard.assertOpen();
@@ -4336,7 +4385,9 @@ async function runQwenServeImpl(
         permissionAudit: permissionAuditPublisher,
         statusProvider: secondaryStatusProvider,
         delegateReadTextFileToClient: false,
-        fileSystem: createBridgeFileSystemAdapter(secondaryBridgeFsFactory),
+        fileSystem: createBridgeFileSystemAdapter(secondaryBridgeFsFactory, {
+          externalWriteRoots: acpExternalWriteRoots,
+        }),
         persistApprovalMode: (workspace, mode) =>
           withSettingsLock(workspace, async () => {
             secondaryGenerationGuard.assertOpen();
@@ -4887,7 +4938,9 @@ async function runQwenServeImpl(
             env: wsEnv.effectiveEnv,
           }),
           delegateReadTextFileToClient: false,
-          fileSystem: createBridgeFileSystemAdapter(wsFsFactory),
+          fileSystem: createBridgeFileSystemAdapter(wsFsFactory, {
+            externalWriteRoots: acpExternalWriteRoots,
+          }),
           persistApprovalMode: (workspace, mode) =>
             withSettingsLock(workspace, async () => {
               generationGuard.assertOpen();

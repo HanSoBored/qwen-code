@@ -50,6 +50,7 @@
  * as HTTP `POST /file`).
  */
 
+import * as path from 'node:path';
 import type {
   ReadTextFileRequest,
   ReadTextFileResponse,
@@ -57,6 +58,12 @@ import type {
   WriteTextFileResponse,
 } from '@agentclientprotocol/sdk';
 import type { BridgeFileSystem } from '@qwen-code/acp-bridge';
+import {
+  canonicalizeWorkspaces,
+  FsError,
+  resolveWithinWorkspace,
+  type ResolvedPath,
+} from './fs/index.js';
 import type {
   WorkspaceFileSystemFactory,
   RequestContext,
@@ -90,10 +97,22 @@ function buildAuditContext(
  * (the same instance `createServeApp` / `runQwenServe` build for
  * HTTP fs routes) — delegated operations share the same `fsAuditEmit` channel
  * + trust gate snapshot.
+ *
+ * Optional `opts.externalWriteRoots` widens the ADAPTER's write
+ * resolution only (never the WFS factory / HTTP routes): absolute
+ * paths that the bound workspace rejects with
+ * `path_outside_workspace` / `symlink_escape` may fall back to a
+ * `resolveWithinWorkspace` against these roots. The widened write
+ * still lands through `wfs.writeTextOverwrite` on the same WFS impl,
+ * so the trust gate, symlink rejection / TOCTOU canonicalization,
+ * size caps, atomic temp+rename + mode preservation, and the write
+ * audit are retained. Default OFF (`[]`).
  */
 export function createBridgeFileSystemAdapter(
   factory: WorkspaceFileSystemFactory,
+  opts?: { externalWriteRoots?: readonly string[] },
 ): BridgeFileSystem {
+  const externalRoots = canonicalizeWorkspaces(opts?.externalWriteRoots ?? []);
   return {
     async writeText(
       params: WriteTextFileRequest,
@@ -101,7 +120,31 @@ export function createBridgeFileSystemAdapter(
       const wfs = factory.forRequest(
         buildAuditContext(params, ACP_WRITE_ROUTE),
       );
-      const resolved = await wfs.resolve(params.path, 'write');
+      // Workspace-first: in-workspace writes keep the exact current
+      // path even when an external root overlaps the workspace.
+      let resolved: ResolvedPath;
+      try {
+        resolved = await wfs.resolve(params.path, 'write');
+      } catch (err) {
+        if (
+          err instanceof FsError &&
+          (err.kind === 'path_outside_workspace' ||
+            err.kind === 'symlink_escape') &&
+          externalRoots.length > 0 &&
+          path.isAbsolute(params.path)
+        ) {
+          // Opt-in external write roots. Relative inputs NEVER fall
+          // back (they stay workspace-anchored); paths outside every
+          // root, and any non-boundary error, rethrow fail-closed.
+          resolved = await resolveWithinWorkspace(
+            params.path,
+            externalRoots,
+            'write',
+          );
+        } else {
+          throw err;
+        }
+      }
       await wfs.writeTextOverwrite(resolved, params.content);
       return {};
     },

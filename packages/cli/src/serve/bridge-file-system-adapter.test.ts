@@ -465,6 +465,173 @@ describe('createBridgeFileSystemAdapter', () => {
     });
   });
 
+  describe('writeText (opt-in external write roots)', () => {
+    // Separate root OUTSIDE the bound workspace (`tmpDir`). The
+    // adapter must only widen its own write resolution for absolute
+    // paths that fall inside these roots — everything else stays
+    // workspace-bound / fail-closed.
+    let tmpRoot: string;
+
+    beforeEach(async () => {
+      tmpRoot = await fsp.realpath(
+        await fsp.mkdtemp(path.join(os.tmpdir(), 'bridge-fs-adapter-ext-')),
+      );
+    });
+    afterEach(async () => {
+      await fsp.rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('writes bytes into an external root and audits with the ACP route label', async () => {
+      const adapter = createBridgeFileSystemAdapter(
+        buildFactory({ trusted: true }),
+        { externalWriteRoots: [tmpRoot] },
+      );
+      const target = path.join(tmpRoot, 'ext.txt');
+
+      const response = await adapter.writeText({
+        path: target,
+        content: 'external-content',
+        sessionId: 'sess:ext',
+      });
+
+      expect(response).toEqual({});
+      expect(await fsp.readFile(target, 'utf8')).toBe('external-content');
+      // The widened write still lands through `wfs.writeTextOverwrite`
+      // on the SAME WFS impl, so the audit route label is the ACP one.
+      const acpEvents = auditEmits.filter((ev) => {
+        const data = ev.data as { route?: string } | undefined;
+        return data?.route === 'ACP writeTextFile';
+      });
+      expect(acpEvents.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('rejects external-root writes for an untrusted workspace with untrusted_workspace', async () => {
+      // Trust-gate parity on the widened path: the external-root
+      // fallback resolves the path, but the commit still goes through
+      // `wfs.writeTextOverwrite`, whose `assertTrustedForIntent` gate
+      // rejects with the same `untrusted_workspace` posture as
+      // in-workspace writes. Pin the specific kind so a future
+      // refactor that drops the gate or routes external writes around
+      // it fails here instead of silently widening the boundary.
+      const adapter = createBridgeFileSystemAdapter(
+        buildFactory({ trusted: false }),
+        { externalWriteRoots: [tmpRoot] },
+      );
+      const target = path.join(tmpRoot, 'untrusted-ext.txt');
+
+      const err = await adapter
+        .writeText({
+          path: target,
+          content: 'x',
+          sessionId: 'sess:ext',
+        })
+        .catch((e: unknown) => e);
+
+      expect((err as { kind?: string }).kind).toBe('untrusted_workspace');
+
+      // The gate rejects before any disk touch — no bytes landed in
+      // the root (same ENOENT posture as the sibling deny tests).
+      // Remove the target if a regression left it behind, then assert
+      // the absence that proves the write never reached disk.
+      await fsp.rm(target, { force: true });
+      await expect(fsp.stat(target)).rejects.toThrow(/ENOENT/);
+    });
+
+    it('still rejects writes outside both workspace and external roots', async () => {
+      const adapter = createBridgeFileSystemAdapter(
+        buildFactory({ trusted: true }),
+        { externalWriteRoots: [tmpRoot] },
+      );
+      const err = await adapter
+        .writeText({
+          path: '/etc/passwd',
+          content: 'pwned',
+          sessionId: 'sess:ext',
+        })
+        .catch((e: unknown) => e);
+      // Workspace resolve fails, the root fallback fails too — the
+      // original boundary posture is preserved.
+      expect((err as { kind?: string }).kind).toBe('path_outside_workspace');
+    });
+
+    it('does NOT fall back for relative paths (stays workspace-anchored)', async () => {
+      const adapter = createBridgeFileSystemAdapter(
+        buildFactory({ trusted: true }),
+        { externalWriteRoots: [tmpRoot] },
+      );
+      const err = await adapter
+        .writeText({
+          path: path.join('..', 'escape.txt'),
+          content: 'x',
+          sessionId: 'sess:ext',
+        })
+        .catch((e: unknown) => e);
+      expect((err as { kind?: string }).kind).toBe('path_outside_workspace');
+      // No fallback reinterpretation: nothing landed in the root.
+      await expect(
+        fsp.readFile(path.join(tmpRoot, 'escape.txt')),
+      ).rejects.toThrow(/ENOENT/);
+    });
+
+    it(
+      'rejects a symlink inside an external root that escapes it (symlink_escape)',
+      async () => {
+        // Symlink semantics are POSIX-only; Windows CI keeps the parity
+        // skip used by the sibling symlink tests.
+        if (process.platform === 'win32') return;
+        const outsideTarget = path.join(
+          tmpRoot,
+          '..',
+          'ext-link-target.txt',
+        );
+        await fsp.writeFile(outsideTarget, 'outside').catch(() => undefined);
+        try {
+          const link = path.join(tmpRoot, 'link-out.txt');
+          await fsp.symlink(outsideTarget, link, 'file');
+          const adapter = createBridgeFileSystemAdapter(
+            buildFactory({ trusted: true }),
+            { externalWriteRoots: [tmpRoot] },
+          );
+          const err = await adapter
+            .writeText({ path: link, content: 'x', sessionId: 'sess:ext' })
+            .catch((e: unknown) => e);
+          // The root fallback re-runs `resolveWithinWorkspace`, whose
+          // symlink-collapse containment check surfaces `symlink_escape`.
+          expect((err as { kind?: string }).kind).toBe('symlink_escape');
+        } finally {
+          await fsp.unlink(outsideTarget).catch(() => undefined);
+        }
+      },
+    );
+
+    it(
+      'prefers the workspace resolve for in-workspace writes (unchanged behavior)',
+      async () => {
+        const adapter = createBridgeFileSystemAdapter(
+          buildFactory({ trusted: true }),
+          { externalWriteRoots: [tmpRoot] },
+        );
+        const target = path.join(tmpDir, 'prefer-ws.txt');
+
+        await adapter.writeText({
+          path: target,
+          content: 'workspace-content',
+          sessionId: 'sess:ext',
+        });
+
+        expect(await fsp.readFile(target, 'utf8')).toBe('workspace-content');
+        // Workspace-first ordering: the initial `wfs.resolve` succeeded,
+        // so no `fs.denied` event preceded the write. A fallback attempt
+        // would have emitted one first (recordAndWrap in resolve).
+        const deniedEvents = auditEmits.filter((ev) => {
+          const data = ev.data as { errorKind?: string } | undefined;
+          return data?.errorKind !== undefined;
+        });
+        expect(deniedEvents).toEqual([]);
+      },
+    );
+  });
+
   describe('factory.forRequest wiring', () => {
     it('passes sessionId into the audit context for both read and write', async () => {
       const calls: Array<{ route: string; sessionId?: string }> = [];
