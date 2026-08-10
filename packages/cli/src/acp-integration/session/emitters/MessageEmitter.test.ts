@@ -317,6 +317,28 @@ describe('MessageEmitter', () => {
       });
     });
 
+    it('skips the usage_update frame when QWEN_DISABLE_USAGE_UPDATE is set', async () => {
+      process.env['QWEN_DISABLE_USAGE_UPDATE'] = '1';
+      try {
+        await emitter.emitUsageMetadata({ promptTokenCount: 100 }, '', 20);
+
+        expect(
+          sendUpdateSpy.mock.calls
+            .map(([update]) => update)
+            .filter((update) => update.sessionUpdate === 'usage_update'),
+        ).toEqual([]);
+        // Private _meta.usage on transcript updates is unaffected.
+        expect(sendUpdateSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionUpdate: 'agent_message_chunk',
+            _meta: expect.objectContaining({ usage: expect.any(Object) }),
+          }),
+        );
+      } finally {
+        delete process.env['QWEN_DISABLE_USAGE_UPDATE'];
+      }
+    });
+
     it('keeps private usage metadata when the context window is unresolved', async () => {
       const ctx: SessionContext = {
         ...mockContext,
