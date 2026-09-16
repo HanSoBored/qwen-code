@@ -7,11 +7,6 @@ on:
         description: 'Git ref (sha/branch) to build'
         required: true
         type: 'string'
-      test_files:
-        description: 'Extra vitest files to run before the bundle (space-separated, e.g. "src/core/openaiContentGenerator/pipeline.test.ts")'
-        required: false
-        default: ''
-        type: 'string'
 
 jobs:
   build:
@@ -48,12 +43,6 @@ jobs:
           npm run build
           npm run bundle
           npm run prepare:package
-
-      - name: 'Extra targeted tests (test_files input)'
-        if: ${{ github.event.inputs.test_files != '' }}
-        # After the bundle: package-local vitest imports workspace dist
-        # output, which a fresh checkout does not have yet.
-        run: 'npm -w packages/core run test -- ${{ github.event.inputs.test_files }}'
 
       - name: 'Build Standalone Archives'
         run: 'npm run package:standalone:release -- --version "0.21.8-fork.$(git rev-parse --short HEAD)" --out-dir dist/standalone'
